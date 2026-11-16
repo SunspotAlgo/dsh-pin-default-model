@@ -1,0 +1,67 @@
+{
+  "name": "dsh-pin-default-model",
+  "version": "1.2.0",
+  "description": "Pins the DeepSeek Harness default model so switching models inside a session never changes what new sessions start with.",
+  "type": "module",
+  "main": "lib/index.js",
+  "license": "MIT",
+  "author": "SunspotAlgo",
+  "homepage": "https://github.com/SunspotAlgo/dsh-pin-default-model#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SunspotAlgo/dsh-pin-default-model.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SunspotAlgo/dsh-pin-default-model/issues"
+  },
+  "engines": {
+    "node": ">=22",
+    "dsh": ">=0.2.1"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "harness",
+    "dsh",
+    "dsh-plugin",
+    "dsh-pack",
+    "model",
+    "default-model"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "icon": "./icon.svg",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-locale"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib",
+    "client",
+    "locale",
+    "docs",
+    "cordis.patch.yml",
+    "icon.svg",
+    "LICENSE",
+    "README.md",
+    "README.zh.md"
+  ]
+}

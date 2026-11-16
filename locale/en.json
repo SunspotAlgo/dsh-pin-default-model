@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Default model pin",
+    "description": "Keeps the DeepSeek Harness default model fixed. Switching models inside a session still works for that session, but it no longer rewrites the default, so every newly created conversation — including one created by a scheduled task — starts on the pinned model. Change the pin in Settings → Default model pin.",
+    "detail": "docs/DETAIL.md"
+  }
+}
