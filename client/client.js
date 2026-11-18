@@ -1,10 +1,13 @@
 /**
  * dsh-pin-default-model browser half: a Settings section for choosing which
- * model every new conversation starts on.
+ * model and reasoning effort every new conversation starts on.
  *
  * All state lives on the host; this page only talks to two local routes with
  * plain fetch. It deliberately avoids the settings-client services so it can
  * load regardless of plugin activation order.
+ *
+ * The catalog exposes `reasoning.efforts` as an array of `{ id, name }`, so
+ * the effort dropdown lists effort ids and shows their display names.
  */
 window.__ModuleLoader__.load({
 	id: "dsh-pin-default-model",
@@ -21,7 +24,7 @@ window.__ModuleLoader__.load({
 
 		const zh = {
 			nav: "默认模型锁定",
-			desc: "锁定新建会话使用的模型。在会话内切换模型仍然只对那个会话生效，不会改写这里的设置。",
+			desc: "锁定新建会话使用的模型与推理等级。在会话内切换模型或推理等级仍然只对那个会话生效，不会改写这里的设置。",
 			current: "当前锁定",
 			notSet: "未设置（使用插件默认值 magpie/group/x-call）",
 			choose: "选择模型",
@@ -33,15 +36,21 @@ window.__ModuleLoader__.load({
 			loading: "加载中…",
 			noCatalog: "没有可用模型。",
 			noCatalogHint: "请先在设置 → 模型里配置至少一个提供方。",
-			effort: "推理档位",
+			effort: "推理等级",
 			effortDefault: "跟随模型默认",
+			effortNone: "该模型不提供推理等级。",
+			effortSuggested: "建议锁定 high",
+			effortLockHigh: "锁定 high",
+			effortFollow: "改为跟随模型默认",
+			effortIncompatible: "当前模型不支持推理等级",
+			effortIncompatibleDetail: "该模型只支持：",
 			reset: "刷新",
 			unavailable: "该模型当前不在可用目录中（仍会按此值锁定）。",
 			note: "锁定值写入 profile 配置。修改后对新建会话立即生效，已打开的会话保持不变。"
 		};
 		const en = {
 			nav: "Default model pin",
-			desc: "Hold the model that new conversations start on. Switching a model inside a session still applies to that session only and no longer rewrites this setting.",
+			desc: "Hold the model and reasoning effort that new conversations start on. Switching either inside a session still applies to that session only and no longer rewrites this setting.",
 			current: "Currently pinned",
 			notSet: "Not set — the bundled default magpie/group/x-call applies",
 			choose: "Choose a model",
@@ -54,7 +63,13 @@ window.__ModuleLoader__.load({
 			noCatalog: "No models available.",
 			noCatalogHint: "Configure at least one provider in Settings → Models first.",
 			effort: "Reasoning effort",
-			effortDefault: "Model default",
+			effortDefault: "Follow the model default",
+			effortNone: "This model offers no reasoning effort.",
+			effortSuggested: "Suggested: lock high",
+			effortLockHigh: "Lock high",
+			effortFollow: "Follow the model default instead",
+			effortIncompatible: "The current model does not support this reasoning effort",
+			effortIncompatibleDetail: "Supported:",
 			reset: "Refresh",
 			unavailable: "This model is not in the current catalog (the pin still uses it).",
 			note: "The pin is written to the profile. A change applies to new conversations immediately; open conversations stay as they are."
@@ -74,6 +89,36 @@ window.__ModuleLoader__.load({
 		function labelOf(selection, emptyText) {
 			if (!selection?.provider || !selection?.model) return emptyText;
 			return `${selection.provider}/${selection.model}`;
+		}
+
+		/**
+		 * Find one model in a provider-grouped catalog.
+		 * @param groups - provider groups from the model catalog.
+		 * @param provider - provider id.
+		 * @param model - model id.
+		 * @returns the catalog entry, or undefined.
+		 */
+		function findModel(groups, provider, model) {
+			const group = (groups ?? []).find((candidate) => candidate?.id === provider);
+			if (group === undefined) return undefined;
+			return (group.models ?? []).find((candidate) => candidate?.id === model);
+		}
+
+		/**
+		 * List the reasoning efforts of one model route.
+		 * The catalog exposes `efforts` as an array of `{ id, name }`.
+		 * @param groups - provider groups from the model catalog.
+		 * @param provider - provider id.
+		 * @param model - model id.
+		 * @returns an array of `{ id, name }` entries.
+		 */
+		function effortsOf(groups, provider, model) {
+			const entry = findModel(groups, provider, model);
+			const efforts = entry?.reasoning?.efforts;
+			if (!Array.isArray(efforts)) return [];
+			return efforts
+				.filter((effort) => typeof effort?.id === 'string' && effort.id !== '')
+				.map((effort) => ({ id: effort.id, name: effort.name ?? effort.id }));
 		}
 
 		function PinSection({ t }) {
@@ -107,18 +152,46 @@ window.__ModuleLoader__.load({
 				load();
 			}, [load]);
 
-			const effortNames = react.useMemo(() => {
-				if (!draft) return [];
-				const group = groups.find((g) => g.id === draft.provider);
-				const model = group?.models?.find((m) => m.id === draft.model);
-				const efforts = model?.reasoning?.efforts;
-				if (!efforts) return [];
-				return Object.keys(efforts).filter((k) => efforts[k] !== false);
-			}, [groups, draft]);
+			const effective = draft ?? pinned ?? {};
+			const effectiveProvider = effective.provider;
+			const effectiveModel = effective.model;
 
-			const fromCatalog = Boolean(
-				groups.some((g) => g.id === pinned?.provider && g.models?.some((m) => m.id === pinned?.model)),
+			// Efforts belong to one exact model route, so they follow the selection.
+			const efforts = react.useMemo(
+				() => effortsOf(groups, effectiveProvider, effectiveModel),
+				[groups, effectiveProvider, effectiveModel],
 			);
+			const effortIds = efforts.map((effort) => effort.id);
+			const supportsHigh = effortIds.includes("high");
+
+			// A locked effort the current model cannot serve is a hard DSH error at
+			// call time, so it is called out here instead of failing silently later.
+			const lockedEffort = effective.reasoningEffort;
+			const effortIncompatible = Boolean(
+				lockedEffort && effortIds.length > 0 && !effortIds.includes(lockedEffort),
+			);
+			const effortUnsupported = Boolean(lockedEffort && effortIds.length === 0);
+
+			const pickModel = (provider, model) => {
+				// Carry over a locked effort only when the new route supports it.
+				const nextEfforts = effortsOf(groups, provider, model).map((effort) => effort.id);
+				const carried = lockedEffort && nextEfforts.includes(lockedEffort) ? lockedEffort : undefined;
+				setDraft({
+					provider,
+					model,
+					...(carried === undefined ? {} : { reasoningEffort: carried }),
+				});
+				setSaved(false);
+			};
+
+			const pickEffort = (effort) => {
+				setDraft({
+					provider: effectiveProvider,
+					model: effectiveModel,
+					...(effort === "" ? {} : { reasoningEffort: effort }),
+				});
+				setSaved(false);
+			};
 
 			const submit = react.useCallback(() => {
 				if (!draft) return;
@@ -149,7 +222,9 @@ window.__ModuleLoader__.load({
 				return react_jsx_runtime.jsx("div", { style: { padding: 12, opacity: 0.75 }, children: t("loading") });
 			}
 
-			const effective = draft ?? pinned ?? {};
+			const fromCatalog = Boolean(
+				groups.some((g) => g.id === pinned?.provider && g.models?.some((m) => m.id === pinned?.model)),
+			);
 
 			return react_jsx_runtime.jsxs("div", {
 				style: { display: "flex", flexDirection: "column", gap: 12, padding: "4px 0" },
@@ -185,7 +260,10 @@ window.__ModuleLoader__.load({
 									pinned?.reasoningEffort ? react_jsx_runtime.jsx("span", {
 										style: { fontSize: 12, opacity: 0.7 },
 										children: `${t("effort")}: ${pinned.reasoningEffort}`
-									}) : null
+									}) : react_jsx_runtime.jsx("span", {
+										style: { fontSize: 12, opacity: 0.7 },
+										children: `${t("effort")}: ${t("effortDefault")}`
+									})
 								]
 							}),
 
@@ -199,16 +277,13 @@ window.__ModuleLoader__.load({
 								style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" },
 								children: [
 									react_jsx_runtime.jsxs("select", {
-										value: effective.provider ? `${effective.provider}\u0000${effective.model}` : "",
+										value: effectiveProvider ? `${effectiveProvider}\u0000${effectiveModel}` : "",
 										disabled: busy,
 										onChange: (event) => {
 											const [provider, model] = String(event.target.value).split("\u0000");
-											if (provider && model) {
-												setDraft({ provider, model });
-												setSaved(false);
-											}
+											if (provider && model) pickModel(provider, model);
 										},
-										style: { ...box, flex: "1 1 260px", minWidth: 200 },
+										style: { ...box, flex: "1 1 240px", minWidth: 190 },
 										children: [
 											react_jsx_runtime.jsx("option", { value: "", children: t("choose") }),
 											groups.map((group) => react_jsx_runtime.jsx("optgroup", {
@@ -220,26 +295,69 @@ window.__ModuleLoader__.load({
 											}, group.id))
 										]
 									}),
-									effortNames.length > 0 ? react_jsx_runtime.jsxs("select", {
-										value: effective.reasoningEffort ?? "",
-										disabled: busy,
-										onChange: (event) => {
-											const effort = String(event.target.value);
-											setDraft({
-												provider: effective.provider,
-												model: effective.model,
-												...(effort ? { reasoningEffort: effort } : {})
-											});
-											setSaved(false);
-										},
-										style: { ...box, flex: "0 1 170px" },
+									react_jsx_runtime.jsxs("select", {
+										value: lockedEffort ?? "",
+										disabled: busy || effortIds.length === 0,
+										onChange: (event) => pickEffort(String(event.target.value)),
+										style: { ...box, flex: "0 1 180px" },
 										children: [
 											react_jsx_runtime.jsx("option", { value: "", children: t("effortDefault") }),
-											effortNames.map((name) => react_jsx_runtime.jsx("option", { value: name, children: name }, name))
+											efforts.map((effort) => react_jsx_runtime.jsx("option", {
+												value: effort.id,
+												children: effort.name === effort.id ? effort.id : `${effort.name} · ${effort.id}`
+											}, effort.id))
 										]
-									}) : null
+									})
 								]
 							}),
+
+							effortIds.length === 0 && effectiveProvider ? react_jsx_runtime.jsx("div", {
+								style: { fontSize: 12, opacity: 0.7 },
+								children: t("effortNone")
+							}) : null,
+
+							effortIncompatible || effortUnsupported ? react_jsx_runtime.jsxs("div", {
+								style: {
+									display: "flex",
+									flexDirection: "column",
+									gap: 6,
+									padding: "8px 10px",
+									borderRadius: 6,
+									border: "1px solid rgba(230,162,60,.4)",
+									background: "rgba(230,162,60,.08)"
+								},
+								children: [
+									react_jsx_runtime.jsx("div", {
+										style: { fontSize: 12, color: "var(--dsh-warning, #e6a23c)" },
+										children: `${t("effortIncompatible")}：${lockedEffort}`
+									}),
+									effortIds.length > 0 ? react_jsx_runtime.jsx("div", {
+										style: { fontSize: 12, opacity: 0.8 },
+										children: `${t("effortIncompatibleDetail")} ${effortIds.join(", ")}`
+									}) : null,
+									react_jsx_runtime.jsx("button", {
+										type: "button",
+										disabled: busy,
+										onClick: () => pickEffort(""),
+										style: { ...box, cursor: "pointer", alignSelf: "flex-start", opacity: 0.9 },
+										children: t("effortFollow")
+									})
+								]
+							}) : null,
+
+							!effortIncompatible && !effortUnsupported && !lockedEffort && supportsHigh ? react_jsx_runtime.jsxs("div", {
+								style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" },
+								children: [
+									react_jsx_runtime.jsx("span", { style: { fontSize: 12, opacity: 0.72 }, children: t("effortSuggested") }),
+									react_jsx_runtime.jsx("button", {
+										type: "button",
+										disabled: busy,
+										onClick: () => pickEffort("high"),
+										style: { ...box, cursor: "pointer", opacity: 0.9 },
+										children: t("effortLockHigh")
+									})
+								]
+							}) : null,
 
 							!fromCatalog && pinned?.provider ? react_jsx_runtime.jsx("div", {
 								style: { fontSize: 12, color: "var(--dsh-warning, #e6a23c)" },

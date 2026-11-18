@@ -94,6 +94,18 @@ check('does not call ctx.get', /ctx\.get\s*\(/.test(source), false);
 check('does not use remote services', source.includes('ctx.remote'), false);
 check('renders a placeholder instead of null/null', source.includes('labelOf(pinned, t("notSet"))'), true);
 
+// --- reasoning effort handling --------------------------------------------
+// The catalog exposes `reasoning.efforts` as an ARRAY of `{ id, name }`.
+// Treating it as an object yields index keys ("0", "1") in the dropdown.
+check('reads efforts as an array', source.includes('Array.isArray(efforts)'), true);
+check('does not use Object.keys on efforts', /Object\.keys\(\s*efforts\s*\)/.test(source), false);
+check('maps effort entries to id and name', source.includes('id: effort.id, name: effort.name'), true);
+check('offers a follow-the-default option', source.includes('effortDefault'), true);
+check('warns about an unsupported locked effort', source.includes('effortIncompatible'), true);
+check('offers a one-click way back to the default', source.includes('effortFollow'), true);
+check('suggests locking high', source.includes('effortLockHigh'), true);
+check('sends the reasoning effort with the pin', source.includes('reasoningEffort: effort'), true);
+
 // --- manifest wiring -------------------------------------------------------
 const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 check('client half is exported', Boolean(manifest.exports['./client']), true);

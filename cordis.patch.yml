@@ -1,7 +1,9 @@
-# dsh bundle patch: inserts this plugin into a profile's layer stack.
 - insert:
     - id: dsh-pin-default-model
       name: 'dsh-pin-default-model'
       config:
         provider: magpie
         model: group/x-call
+        # Optional. Omit it to let each model use its own default effort.
+        # When set, the model above must actually offer this effort level.
+        # reasoningEffort: high

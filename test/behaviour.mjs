@@ -3,6 +3,11 @@
  *
  * Exercises the pinned saveSelection replacement and the two management
  * routes against fake Cordis services that behave like the real ones.
+ *
+ * The pin is a routing triple. A pin without a reasoning effort means
+ * "follow the provider default" and must not interfere with the effort; a pin
+ * with one must hold it. `resolveCallConfig` in DSH rejects an effort the model
+ * does not support, so the set route refuses such a pin outright.
  */
 import { apply } from '../lib/index.js';
 
@@ -28,13 +33,37 @@ function makeService(initial) {
 	};
 }
 
-function makeContext(service, routes) {
+const CATALOG = {
+	groups: [
+		{
+			id: 'magpie',
+			name: 'Magpie',
+			models: [
+				{ id: 'group/x-call', name: 'X-CALL', reasoning: { efforts: [{ id: 'high', name: 'High' }] } },
+				{
+					id: 'workbuddy/space-bunny',
+					name: 'Space Bunny',
+					reasoning: {
+						efforts: [
+							{ id: 'low', name: 'Low' },
+							{ id: 'medium', name: 'Medium' },
+							{ id: 'high', name: 'High' },
+							{ id: 'xhigh', name: 'Extra High' },
+							{ id: 'max', name: 'Max' },
+						],
+					},
+				},
+				{ id: 'no-reasoning', name: 'Plain' },
+			],
+		},
+	],
+};
+
+function makeContext(service, routes, catalog = CATALOG) {
 	let cleanup;
 	const ctx = {
 		agentDefaultModel: service,
-		sessionController: {
-			modelCatalog: async () => ({ groups: [{ id: 'magpie', models: [{ id: 'group/x-call' }] }] }),
-		},
+		sessionController: { modelCatalog: async () => catalog },
 		webServer: {
 			register: (route) => { routes.set(route.path, route.handler); return () => routes.delete(route.path); },
 		},
@@ -74,8 +103,7 @@ const PIN = { provider: 'magpie', model: 'group/x-call' };
 console.log('\n=== routes are registered ===');
 {
 	const routes = new Map();
-	const service = makeService(PIN);
-	const { ctx, dispose } = makeContext(service, routes);
+	const { ctx, dispose } = makeContext(makeService(PIN), routes);
 	apply(ctx, {});
 	check('view route', routes.has('/dsh-pin-model/view'), true);
 	check('set route', routes.has('/dsh-pin-model/set'), true);
@@ -102,7 +130,6 @@ console.log('\n=== a session switch does not move the default ===');
 	const service = makeService(PIN);
 	const { ctx, dispose } = makeContext(service, routes);
 	apply(ctx, {});
-
 	await service.saveSelection({ provider: 'workbuddy', model: 'deepseek-v4-pro' });
 	check('default stays pinned', service.currentSelection(), PIN);
 	dispose();
@@ -114,15 +141,11 @@ console.log('\n=== POST /set changes the pin ===');
 	const service = makeService(PIN);
 	const { ctx, dispose } = makeContext(service, routes);
 	apply(ctx, {});
-
-	const next = { provider: 'workbuddy-ai', model: 'deepseek-v4.1-flash-sg' };
+	const next = { provider: 'magpie', model: 'workbuddy/space-bunny' };
 	const res = makeResponse();
 	await routes.get('/dsh-pin-model/set')(makeRequest('POST', next), res);
-	const body = res.json();
-	check('ok', body.ok, true);
+	check('ok', res.json().ok, true);
 	check('service default updated', service.currentSelection(), next);
-
-	// A later session switch must still be refused.
 	await service.saveSelection({ provider: 'apikeyfan', model: 'gpt-6.1-sol' });
 	check('new pin holds', service.currentSelection(), next);
 	dispose();
@@ -137,6 +160,83 @@ console.log('\n=== POST /set rejects an incomplete selection ===');
 	await routes.get('/dsh-pin-model/set')(makeRequest('POST', { provider: 'magpie' }), res);
 	check('status', res.status, 400);
 	check('ok false', res.json().ok, false);
+	dispose();
+}
+
+console.log('\n=== a locked effort is stored and held ===');
+{
+	const routes = new Map();
+	const service = makeService(PIN);
+	const { ctx, dispose } = makeContext(service, routes);
+	apply(ctx, {});
+
+	const res = makeResponse();
+	await routes.get('/dsh-pin-model/set')(makeRequest('POST', {
+		provider: 'magpie',
+		model: 'workbuddy/space-bunny',
+		reasoningEffort: 'high',
+	}), res);
+	check('ok', res.json().ok, true);
+	check('effort stored', service.currentSelection().reasoningEffort, 'high');
+
+	// A session that switches only its effort must not move the default.
+	await service.saveSelection({ provider: 'magpie', model: 'workbuddy/space-bunny', reasoningEffort: 'low' });
+	check('locked effort holds', service.currentSelection().reasoningEffort, 'high');
+
+	// A session that switches the route must not move the default either.
+	await service.saveSelection({ provider: 'magpie', model: 'group/x-call', reasoningEffort: 'high' });
+	check('locked route holds', service.currentSelection().model, 'workbuddy/space-bunny');
+	dispose();
+}
+
+console.log('\n=== POST /set refuses an effort the model does not support ===');
+{
+	const routes = new Map();
+	const service = makeService(PIN);
+	const { ctx, dispose } = makeContext(service, routes);
+	apply(ctx, {});
+	const res = makeResponse();
+	await routes.get('/dsh-pin-model/set')(makeRequest('POST', {
+		provider: 'magpie',
+		model: 'workbuddy/space-bunny',
+		reasoningEffort: 'extreme',
+	}), res);
+	check('status', res.status, 400);
+	check('ok false', res.json().ok, false);
+	check('error names the effort', res.json().error.includes('extreme'), true);
+	check('pin unchanged', service.currentSelection(), PIN);
+	dispose();
+}
+
+console.log('\n=== POST /set refuses an effort on a model without reasoning ===');
+{
+	const routes = new Map();
+	const service = makeService(PIN);
+	const { ctx, dispose } = makeContext(service, routes);
+	apply(ctx, {});
+	const res = makeResponse();
+	await routes.get('/dsh-pin-model/set')(makeRequest('POST', {
+		provider: 'magpie',
+		model: 'no-reasoning',
+		reasoningEffort: 'high',
+	}), res);
+	check('status', res.status, 400);
+	check('pin unchanged', service.currentSelection(), PIN);
+	dispose();
+}
+
+console.log('\n=== a pin without an effort leaves the effort alone ===');
+{
+	const routes = new Map();
+	const service = makeService(PIN);
+	const { ctx, dispose } = makeContext(service, routes);
+	apply(ctx, {});
+	// No reasoning effort in the pin: the provider default applies and a session
+	// may change its own effort without disturbing the pinned route.
+	await service.saveSelection({ provider: 'magpie', model: 'group/x-call', reasoningEffort: 'low' });
+	check('effort not pinned, change allowed', service.currentSelection().reasoningEffort, 'low');
+	await service.saveSelection({ provider: 'magpie', model: 'group/x-call', reasoningEffort: 'high' });
+	check('route still pinned', service.currentSelection().model, 'group/x-call');
 	dispose();
 }
 
